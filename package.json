@@ -14,15 +14,15 @@
     "react",
     "tailwindcss"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "0xcasio <defipm@protonmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/prediction-market-hedging-calculator.git"
+    "url": "https://github.com/0xcasio/hedgeAssistant"
   },
-  "homepage": "https://github.com/yourusername/prediction-market-hedging-calculator#readme",
+  "homepage": "https://github.com/0xcasio/hedgeAssistant#readme",
   "bugs": {
-    "url": "https://github.com/yourusername/prediction-market-hedging-calculator/issues"
+    "url": "https://github.com/0xcasio/hedgeAssistant/issues"
   },
   "scripts": {
     "dev": "next dev",
