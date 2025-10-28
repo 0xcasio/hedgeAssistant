@@ -73,7 +73,7 @@ The Prediction Market Hedging Calculator provides:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/0xcasio/HedgeAssisttan.git
+   git clone https://github.com/0xcasio/hedgeAssistant
    cd prediction-market-hedging-calculator
    ```
 
