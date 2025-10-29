@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Head from 'next/head';
-import { Target, TrendingUp, RefreshCw, DollarSign, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Target, TrendingUp, RefreshCw, DollarSign, Check, ChevronDown, ChevronRight, X, Loader2 } from "lucide-react";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Button } from "../components/ui/button";
@@ -33,6 +33,16 @@ export default function Home() {
   const [isPayoutExpanded, setIsPayoutExpanded] = useState(false);
   const [isPerfectHedgeExpanded, setIsPerfectHedgeExpanded] = useState(true);
   const [isSimpleExitExpanded, setIsSimpleExitExpanded] = useState(false);
+
+  // Individual state for each strategy expansion
+  const [expandedStrategies, setExpandedStrategies] = useState({});
+
+  // Sorting state for hedging strategies
+  const [sortBy, setSortBy] = useState('return'); // 'return', 'profit', 'ifYesWins', 'ifNoWins'
+
+  // Mobile modal state
+  const [showMobileConfig, setShowMobileConfig] = useState(false);
+  const [calculatingStrategies, setCalculatingStrategies] = useState(false);
 
   // All existing helper functions preserved
   const normalizePercentages = (team1Chance, team2Chance) => {
@@ -86,6 +96,69 @@ export default function Home() {
         dollarAmount: convertContractsToDollars(parseFloat(shares) || 0, parseFloat(buyPrice) || 0)
       };
     }
+  };
+
+  // Sorting functions for hedging strategies
+  const sortStrategies = (strategies) => {
+    const strategyArray = Object.entries(strategies).map(([key, strategy]) => ({
+      key,
+      ...strategy
+    }));
+
+    return strategyArray.sort((a, b) => {
+      switch (sortBy) {
+        case 'return':
+          return (b.profitPercent || 0) - (a.profitPercent || 0);
+        case 'profit':
+          const aProfit = a.guaranteedProfit !== undefined ? a.guaranteedProfit : a.profit;
+          const bProfit = b.guaranteedProfit !== undefined ? b.guaranteedProfit : b.profit;
+          return (bProfit || 0) - (aProfit || 0);
+        case 'ifYesWins':
+          return (b.profitIfOriginalWins || 0) - (a.profitIfOriginalWins || 0);
+        case 'ifNoWins':
+          return (b.profitIfHedgeWins || 0) - (a.profitIfHedgeWins || 0);
+        default:
+          return 0;
+      }
+    });
+  };
+
+  const getSortDisplayValue = (strategy) => {
+    switch (sortBy) {
+      case 'return':
+        return `${(strategy.profitPercent || 0).toFixed(1)}%`;
+      case 'profit':
+        return `$${(strategy.profit || strategy.guaranteedProfit || 0).toFixed(2)}`;
+      case 'ifYesWins':
+        return `$${(strategy.profitIfOriginalWins || 0).toFixed(2)}`;
+      case 'ifNoWins':
+        return `$${(strategy.profitIfHedgeWins || 0).toFixed(2)}`;
+      default:
+        return '';
+    }
+  };
+
+  const getSortAttributeLabel = () => {
+    switch (sortBy) {
+      case 'return':
+        return 'Return';
+      case 'profit':
+        return 'Profit';
+      case 'ifYesWins':
+        return 'If Yes Wins';
+      case 'ifNoWins':
+        return 'If No Wins';
+      default:
+        return 'Return';
+    }
+  };
+
+  // Toggle individual strategy expansion
+  const toggleStrategyExpansion = (strategyKey) => {
+    setExpandedStrategies(prev => ({
+      ...prev,
+      [strategyKey]: !prev[strategyKey]
+    }));
   };
 
   // All existing useEffect hooks preserved
@@ -360,6 +433,7 @@ export default function Home() {
     }
     
     setLoading(true);
+    setCalculatingStrategies(true);
     setError('');
     setResults(null);
     
@@ -376,6 +450,8 @@ export default function Home() {
       if (result.success) {
         console.log('Results received:', result.data);
         setResults(result.data);
+        // Close mobile modal when calculation is complete
+        setShowMobileConfig(false);
       } else {
         setError(result.error);
       }
@@ -383,6 +459,7 @@ export default function Home() {
       setError(error.message);
     } finally {
       setLoading(false);
+      setCalculatingStrategies(false);
     }
   };
   
@@ -410,21 +487,28 @@ export default function Home() {
     return `${sign}${percent.toFixed(1)}%`;
   };
   
-  const createStrategyCard = (strategy, position, isBest) => {
+  const createStrategyCard = (strategy, position, isBest, strategyKey, sortDisplayValue) => {
     const profitClass = strategy.profit >= 0 || strategy.guaranteedProfit >= 0 ? 'text-emerald-400' : 'text-red-400';
     const mainProfit = strategy.guaranteedProfit !== undefined ? strategy.guaranteedProfit : strategy.profit;
     const mainProfitPercent = strategy.profitPercent;
+    const isExpanded = expandedStrategies[strategyKey] || false;
     
     return (
-      <Collapsible key={strategy.strategy} open={strategy.strategy === 'Perfect Hedge' ? isPerfectHedgeExpanded : isSimpleExitExpanded} onOpenChange={strategy.strategy === 'Perfect Hedge' ? setIsPerfectHedgeExpanded : setIsSimpleExitExpanded}>
+      <Collapsible key={strategy.strategy} open={isExpanded} onOpenChange={() => toggleStrategyExpansion(strategyKey)}>
         <Card className={`bg-[#12141a] border-2 ${isBest ? 'border-emerald-500' : 'border-slate-800'} hover:border-emerald-400 transition-colors overflow-hidden`}>
           <CollapsibleTrigger className="w-full p-6 text-left">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <ChevronRight className={`size-5 text-slate-400 transition-transform ${(strategy.strategy === 'Perfect Hedge' ? isPerfectHedgeExpanded : isSimpleExitExpanded) ? 'rotate-90' : ''}`} />
+                <ChevronRight className={`size-5 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                 <h3 className="text-white">{strategy.strategy}</h3>
               </div>
-              {isBest && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">✓ RECOMMENDED</Badge>}
+              <Badge className={`text-white hover:opacity-90 ${
+                sortBy === 'return' && parseFloat(sortDisplayValue.replace('%', '')) < 0
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}>
+                {getSortAttributeLabel()}: {sortDisplayValue}
+              </Badge>
             </div>
           </CollapsibleTrigger>
           
@@ -557,38 +641,60 @@ export default function Home() {
                     { name: currentPrices.team1 || currentPrices.yesSubTitle, chance: normalizePercentages(currentPrices.team1Chance, currentPrices.team2Chance).team1, yesPrice: (currentPrices.yesAsk * 100).toFixed(0), noPrice: (currentPrices.noAsk * 100).toFixed(0), icon: "🏒" },
                     { name: currentPrices.team2 || currentPrices.noSubTitle, chance: normalizePercentages(currentPrices.team1Chance, currentPrices.team2Chance).team2, yesPrice: (currentPrices.noAsk * 100).toFixed(0), noPrice: (currentPrices.yesAsk * 100).toFixed(0), icon: "🏒" }
                   ].map((teamData, idx) => (
-                    <button
+                    <div
                       key={idx}
-                      onClick={() => setTeam(teamData.name)}
-                      className={`w-full grid grid-cols-12 gap-4 items-center p-4 rounded-lg transition-all ${
+                      className={`w-full p-4 rounded-lg transition-all ${
                         team === teamData.name
                           ? 'bg-emerald-500/20 border-2 border-emerald-500'
                           : 'bg-slate-900/30 border-2 border-transparent hover:bg-slate-900/50 hover:border-slate-700'
                       }`}
                     >
-                      <div className="col-span-5 flex items-center gap-3">
-                        {team === teamData.name && (
-                          <div className="flex-shrink-0 size-5 bg-emerald-500 rounded-full flex items-center justify-center">
-                            <Check className="size-3 text-white" />
-                          </div>
-                        )}
-                        <span className="text-2xl">{teamData.icon}</span>
-                        <span className="text-white text-left">{teamData.name}</span>
+                      {/* Team Info Row - Desktop: horizontal, Mobile: horizontal */}
+                      <div className="flex items-center justify-between mb-3 lg:mb-0">
+                        <div className="flex items-center gap-3">
+                          {team === teamData.name && (
+                            <div className="flex-shrink-0 size-5 bg-emerald-500 rounded-full flex items-center justify-center">
+                              <Check className="size-3 text-white" />
+                            </div>
+                          )}
+                          <span className="text-2xl">{teamData.icon}</span>
+                          <span className="text-white text-left">{teamData.name}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-300">{teamData.chance}%</span>
+                        </div>
                       </div>
-                      <div className="col-span-2">
-                        <span className="text-slate-300">{teamData.chance}%</span>
-                      </div>
-                      <div className="col-span-5 flex items-center justify-end gap-2">
-                        <div className="px-5 py-1.5 bg-[#3b82f6] text-white rounded-md text-center min-w-[80px]">
+                      
+                      {/* Buttons Row - Below team info on mobile, inline on desktop */}
+                      <div className="flex items-center justify-center lg:justify-end gap-3">
+                        <div 
+                          className="px-6 py-2 bg-[#3b82f6] text-white rounded-md text-center min-w-[100px] cursor-pointer hover:bg-[#2563eb] transition-colors"
+                          onClick={() => {
+                            setTeam(teamData.name);
+                            setSide("YES");
+                            if (window.innerWidth < 1024) {
+                              setShowMobileConfig(true);
+                            }
+                          }}
+                        >
                           <div className="text-xs opacity-80">YES</div>
-                          <div className="text-sm">{teamData.yesPrice}¢</div>
+                          <div className="text-sm font-medium">{teamData.yesPrice}¢</div>
                         </div>
-                        <div className="px-5 py-1.5 bg-[#a855f7] text-white rounded-md text-center min-w-[80px]">
+                        <div 
+                          className="px-6 py-2 bg-[#a855f7] text-white rounded-md text-center min-w-[100px] cursor-pointer hover:bg-[#9333ea] transition-colors"
+                          onClick={() => {
+                            setTeam(teamData.name);
+                            setSide("NO");
+                            if (window.innerWidth < 1024) {
+                              setShowMobileConfig(true);
+                            }
+                          }}
+                        >
                           <div className="text-xs opacity-80">NO</div>
-                          <div className="text-sm">{teamData.noPrice}¢</div>
+                          <div className="text-sm font-medium">{teamData.noPrice}¢</div>
                         </div>
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </Card>
@@ -599,18 +705,34 @@ export default function Home() {
               <div className="space-y-6">
                 {/* Hedging Strategies */}
                 <div className="space-y-4">
-                  <h2 className="text-white">Hedging Strategies</h2>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-white">Hedging Strategies</h2>
+                    
+                    {/* Sorting Controls */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-400">Sort by:</span>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="bg-slate-800 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="return">Return</option>
+                        <option value="profit">Profit</option>
+                        <option value="ifYesWins">If Yes Wins</option>
+                        <option value="ifNoWins">If No Wins</option>
+                      </select>
+                    </div>
+                  </div>
 
                   {/* Strategy Cards */}
-                  {['exit', 'perfectHedge', 'conservative', 'moderate', 'minimal'].map(key => {
-                    const strategy = results.strategies[key];
+                  {sortStrategies(results.strategies).map(({ key, ...strategy }) => {
                     const isBest = key === (
                       results.strategies.perfectHedge.guaranteedProfit > results.strategies.exit.profit 
                         ? 'perfectHedge' 
                         : 'exit'
                     );
                     
-                    return createStrategyCard(strategy, results.position, isBest);
+                    return createStrategyCard(strategy, results.position, isBest, key, getSortDisplayValue(strategy));
                   })}
                 </div>
 
@@ -670,8 +792,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* Right Column - Position Configuration (Sticky) */}
-          <div className="lg:col-span-1">
+          {/* Right Column - Position Configuration (Desktop Only) */}
+          <div className="hidden lg:block lg:col-span-1">
             <div className="sticky top-6">
               <Card className="p-6 bg-[#12141a] border-slate-800">
                 <h2 className="text-white mb-6">Position Configuration</h2>
@@ -702,7 +824,13 @@ export default function Home() {
                     <div className="grid grid-cols-2 gap-3">
                       <button
                         type="button"
-                        onClick={() => setSide("YES")}
+                        onClick={() => {
+                          setSide("YES");
+                          // Show mobile modal on mobile devices
+                          if (window.innerWidth < 1024) {
+                            setShowMobileConfig(true);
+                          }
+                        }}
                         disabled={!team}
                         className={`p-3 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                           side === "YES"
@@ -717,7 +845,13 @@ export default function Home() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSide("NO")}
+                        onClick={() => {
+                          setSide("NO");
+                          // Show mobile modal on mobile devices
+                          if (window.innerWidth < 1024) {
+                            setShowMobileConfig(true);
+                          }
+                        }}
                         disabled={!team}
                         className={`p-3 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                           side === "NO"
@@ -844,6 +978,154 @@ export default function Home() {
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-200 p-4 rounded-lg mt-6">
             ❌ {error}
+          </div>
+        )}
+
+        {/* Mobile Position Configuration Modal - Full Screen */}
+        {showMobileConfig && (
+          <div 
+            className="fixed inset-0 bg-[#12141a] z-50 flex flex-col lg:hidden animate-in fade-in duration-300"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowMobileConfig(false);
+              }
+            }}
+          >
+            <div className="bg-[#12141a] w-full h-full flex flex-col animate-in slide-in-from-top duration-300">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                <h2 className="text-white text-lg font-semibold">Position Configuration</h2>
+                <button
+                  onClick={() => setShowMobileConfig(false)}
+                  className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+                >
+                  <X className="size-5 text-slate-400" />
+                </button>
+              </div>
+
+              {/* Modal Content - Scrollable */}
+              <div className="flex-1 overflow-y-auto p-4">
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  {/* Selected Team */}
+                  <div className="space-y-2">
+                    <Label className="text-slate-300 text-sm">Selected Team</Label>
+                    <div className="p-3 rounded-lg border-2 bg-slate-900/50 border-slate-700 border-dashed">
+                      <span className="text-slate-500 text-sm">
+                        {team ? team : 'Click a team above to select'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Position Side - Mobile Optimized */}
+                  <div className="space-y-2">
+                    <Label className="text-slate-300 text-sm">Position Side</Label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSide("YES")}
+                        disabled={!team}
+                        className={`p-4 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                          side === "YES"
+                            ? 'bg-[#3b82f6] border-[#3b82f6] text-white'
+                            : 'bg-[#1e3a5f] border-[#2d4a6e] text-[#60a5fa] hover:bg-[#2d4a6e]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Yes</span>
+                          <span className="text-xs">{currentPrices ? `${(currentPrices.yesAsk * 100).toFixed(0)}¢` : '--'}</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSide("NO")}
+                        disabled={!team}
+                        className={`p-4 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                          side === "NO"
+                            ? 'bg-[#a855f7] border-[#a855f7] text-white'
+                            : 'bg-[#3d2456] border-[#4d3066] text-[#c084fc] hover:bg-[#4d3066]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">No</span>
+                          <span className="text-xs">{currentPrices ? `${(currentPrices.noAsk * 100).toFixed(0)}¢` : '--'}</span>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <Separator className="bg-slate-800" />
+
+                  {/* Position Size */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-slate-300 text-sm">Position Size</Label>
+                      <Select value={inputMode} onValueChange={setInputMode}>
+                        <SelectTrigger className="w-[110px] h-7 bg-[#1a1d24] border-slate-700 text-white text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="contracts">Contracts</SelectItem>
+                          <SelectItem value="dollars">Dollars</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="relative">
+                      <Input
+                        type="number"
+                        value={inputMode === 'dollars' ? dollarAmount : shares}
+                        onChange={(e) => {
+                          if (inputMode === 'dollars') {
+                            setDollarAmount(e.target.value);
+                          } else {
+                            setShares(e.target.value);
+                          }
+                        }}
+                        placeholder="0.00"
+                        className="bg-[#1a1d24] border-slate-700 text-white text-right text-2xl h-14"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">Average price</span>
+                        <span className="text-white">{buyPrice}¢</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">Estimated cost</span>
+                        <span className="text-white">${getCurrentPosition().dollarAmount.toFixed(2)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">Payout if {side}</span>
+                        <span className="text-white">
+                          $100.00
+                          <span className="text-emerald-400 ml-1">(+$100.00)</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Separator className="bg-slate-800" />
+
+                  {/* Calculate Button with Loading State */}
+                    <Button
+                      type="submit"
+                      disabled={!scriptLoaded || !team || calculatingStrategies}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 mt-6 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
+                    >
+                    {calculatingStrategies ? (
+                      <>
+                        <Loader2 className="size-5 mr-2 animate-spin" />
+                        Calculating Strategies...
+                      </>
+                    ) : (
+                      <>
+                        <DollarSign className="size-5 mr-2" />
+                        {scriptLoaded ? 'Calculate Strategies' : 'Loading script...'}
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </div>
+            </div>
           </div>
         )}
       </div>
