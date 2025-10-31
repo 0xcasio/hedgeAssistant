@@ -28,6 +28,7 @@ export default function Home() {
   const [availableTeams, setAvailableTeams] = useState([]);
   const [currentPrices, setCurrentPrices] = useState(null);
   const [priceLoading, setPriceLoading] = useState(false);
+  const [marketTitle, setMarketTitle] = useState('');
 
   // New UI state for collapsible sections
   const [isPayoutExpanded, setIsPayoutExpanded] = useState(false);
@@ -138,6 +139,88 @@ export default function Home() {
     }
   };
 
+  const isNegativeForCurrentSort = (strategy) => {
+    switch (sortBy) {
+      case 'return':
+        return (strategy.profitPercent || 0) < 0;
+      case 'profit': {
+        const p = strategy.guaranteedProfit !== undefined ? strategy.guaranteedProfit : strategy.profit;
+        return (p || 0) < 0;
+      }
+      case 'ifYesWins':
+        return (strategy.profitIfOriginalWins || 0) < 0;
+      case 'ifNoWins':
+        return (strategy.profitIfHedgeWins || 0) < 0;
+      default:
+        return false;
+    }
+  };
+
+  const getOppositeTeamName = () => {
+    if (!currentPrices || !team) return null;
+    if (team === currentPrices.team1) return currentPrices.team2 || null;
+    if (team === currentPrices.team2) return currentPrices.team1 || null;
+    return null;
+  };
+
+  const getInstructions = (strategy, position, marketInfo) => {
+    const otherTeam = getOppositeTeamName();
+    const hedgePrice = typeof strategy.hedgePrice === 'number' ? strategy.hedgePrice : null;
+    const hedgeShares = typeof strategy.hedgeShares === 'number' ? strategy.hedgeShares : null;
+    const howAction = (otherTeam && hedgePrice !== null && hedgeShares !== null)
+      ? `Buy ${hedgeShares.toFixed(2)} YES contracts on ${otherTeam} at $${hedgePrice.toFixed(2)} each.`
+      : (strategy.action || '');
+
+    // Compute movement from original buy to current price for the user's side
+    const currentSidePrice = marketInfo
+      ? (position.side === 'YES' ? marketInfo.currentYesPrice : marketInfo.currentNoPrice)
+      : null;
+    const delta = currentSidePrice !== null && currentSidePrice !== undefined
+      ? (currentSidePrice - position.buyPrice)
+      : null;
+    // Prepare human-readable movement with a small threshold (0.5¢) to avoid +$0.00 noise
+    const absDelta = delta !== null ? Math.abs(delta) : null;
+    const isTinyMove = absDelta !== null ? absDelta < 0.005 : false; // < half a cent
+    const direction = delta !== null ? (delta >= 0 ? 'up' : 'down') : '';
+    const deltaSign = delta !== null ? (delta >= 0 ? '+' : '-') : '';
+    const deltaDollars = delta !== null ? `${deltaSign}$${absDelta.toFixed(2)}` : '';
+    const deltaPct = delta !== null && position.buyPrice > 0
+      ? `${deltaSign}${((absDelta / position.buyPrice) * 100).toFixed(1)}%`
+      : '';
+    const movePhrase = delta === null ? 'a favorable move'
+      : (isTinyMove ? 'about the same as your buy'
+      : `${direction} ${deltaDollars} (${deltaPct}) from your buy`);
+    if (strategy.strategy === 'Perfect Hedge') {
+      return {
+        when: isTinyMove
+          ? `When prices are about the same as your buy and you want certainty now.`
+          : `After a strong move in your favor — your ${position.side} price is ${movePhrase}.`,
+        why: 'Locks in the same profit no matter who wins.',
+        how: howAction
+      };
+    }
+    if (strategy.strategy.startsWith('Partial Hedge')) {
+      return {
+        when: isTinyMove
+          ? `When prices haven\'t moved much — hedge a portion for protection while you wait.`
+          : `After a moderate move — your ${position.side} price is ${movePhrase}.`,
+        why: 'Reduces losses if wrong while keeping some gains if right.',
+        how: howAction
+      };
+    }
+    if (strategy.strategy === 'Simple Exit') {
+      const sideText = position.side;
+      return {
+        when: isTinyMove
+          ? `When you prefer cash now or your outlook changed (price ~ same as your buy).`
+          : `When you prefer cash now or your outlook changed (current ${sideText} price is ${movePhrase}).`,
+        why: 'Closes the position immediately at today\'s price.',
+        how: `Sell ${position.shares} ${sideText} shares at the current bid.`
+      };
+    }
+    return { when: '', why: '', how: howAction };
+  };
+
   const getSortAttributeLabel = () => {
     switch (sortBy) {
       case 'return':
@@ -190,6 +273,9 @@ export default function Home() {
             const data = await response.json();
             const teams = [];
             let currentPrices = null;
+            if (data.market) {
+              setMarketTitle(data.market.title || data.event?.title || '');
+            }
             
             if (data.allMarkets) {
               data.allMarkets.forEach(market => {
@@ -267,6 +353,7 @@ export default function Home() {
               const data = await response.json();
               if (data && data.length > 0) {
                 const market = data[0];
+                setMarketTitle(market.question || '');
                 const yesPrice = parseFloat(market.outcomePrices[0]);
                 const noPrice = parseFloat(market.outcomePrices[1]);
                 
@@ -487,11 +574,12 @@ export default function Home() {
     return `${sign}${percent.toFixed(1)}%`;
   };
   
-  const createStrategyCard = (strategy, position, isBest, strategyKey, sortDisplayValue) => {
+  const createStrategyCard = (strategy, position, isBest, strategyKey, sortDisplayValue, marketInfo) => {
     const profitClass = strategy.profit >= 0 || strategy.guaranteedProfit >= 0 ? 'text-emerald-400' : 'text-red-400';
     const mainProfit = strategy.guaranteedProfit !== undefined ? strategy.guaranteedProfit : strategy.profit;
     const mainProfitPercent = strategy.profitPercent;
     const isExpanded = expandedStrategies[strategyKey] || false;
+    const instructions = getInstructions(strategy, position, marketInfo);
     
     return (
       <Collapsible key={strategy.strategy} open={isExpanded} onOpenChange={() => toggleStrategyExpansion(strategyKey)}>
@@ -503,7 +591,7 @@ export default function Home() {
                 <h3 className="text-white">{strategy.strategy}</h3>
               </div>
               <Badge className={`text-white hover:opacity-90 ${
-                sortBy === 'return' && parseFloat(sortDisplayValue.replace('%', '')) < 0
+                isNegativeForCurrentSort(strategy)
                   ? 'bg-red-600 hover:bg-red-700'
                   : 'bg-emerald-600 hover:bg-emerald-700'
               }`}>
@@ -515,7 +603,24 @@ export default function Home() {
           <CollapsibleContent>
             <div className="px-6 pb-6 space-y-4">
               <div className="bg-slate-900/50 rounded-lg p-4">
-                <p className="text-sm text-slate-300">{strategy.action}</p>
+                <p className="text-sm text-slate-300">{getOppositeTeamName() && strategy.hedgePrice !== undefined && strategy.hedgeShares !== undefined
+                  ? `Buy ${strategy.hedgeShares.toFixed(2)} YES contracts on ${getOppositeTeamName()} at $${strategy.hedgePrice.toFixed(2)} each`
+                  : strategy.action}
+                </p>
+                <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
+                  <div className="bg-slate-800/40 rounded-md p-3">
+                    <p className="text-slate-400 text-xs mb-1">WHEN</p>
+                    <p className="text-slate-200">{instructions.when}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-md p-3">
+                    <p className="text-slate-400 text-xs mb-1">WHY</p>
+                    <p className="text-slate-200">{instructions.why}</p>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-md p-3">
+                    <p className="text-slate-400 text-xs mb-1">HOW</p>
+                    <p className="text-slate-200">{instructions.how}</p>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -533,7 +638,7 @@ export default function Home() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4">
                     <p className="text-xs text-slate-400 mb-1">IF {position.side} WINS</p>
-                    <p className="text-xl text-emerald-400">{formatCurrency(strategy.profitIfOriginalWins)}</p>
+                    <p className={`text-xl ${strategy.profitIfOriginalWins >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatCurrency(strategy.profitIfOriginalWins)}</p>
                   </div>
                   <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4">
                     <p className="text-xs text-slate-400 mb-1">IF {position.side === 'YES' ? 'NO' : 'YES'} WINS</p>
@@ -606,7 +711,7 @@ export default function Home() {
               value={marketURL}
               onChange={(e) => setMarketURL(e.target.value)}
               placeholder="Enter Kalshi market URL..."
-              className="bg-[#1a1d24] border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500"
+              className="bg-[#1a1d24] border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500 selection:bg-emerald-500/30 selection:text-white"
             />
           </div>
         </Card>
@@ -625,9 +730,14 @@ export default function Home() {
             {currentPrices && (
               <Card className="p-6 bg-[#12141a] border-slate-800">
                 <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                     <TrendingUp className="size-5 text-emerald-500" />
-                    <h2 className="text-white">Current Market Prices</h2>
+                    <div className="flex flex-col">
+                      {(results?.marketInfo?.title || marketTitle) && (
+                        <span className="text-slate-400 text-xs leading-tight">{results?.marketInfo?.title || marketTitle}</span>
+                      )}
+                      <h2 className="text-white">Current Market Prices</h2>
+                    </div>
                   </div>
                   <Button variant="outline" size="sm" className="bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white" onClick={refreshPrices} disabled={priceLoading}>
                     <RefreshCw className={`size-4 mr-2 ${priceLoading ? 'animate-spin' : ''}`} />
@@ -732,7 +842,7 @@ export default function Home() {
                         : 'exit'
                     );
                     
-                    return createStrategyCard(strategy, results.position, isBest, key, getSortDisplayValue(strategy));
+                    return createStrategyCard(strategy, results.position, isBest, key, getSortDisplayValue(strategy), results.marketInfo);
                   })}
                 </div>
 

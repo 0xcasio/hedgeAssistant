@@ -297,51 +297,61 @@ function calculatePerfectHedge(position, currentPrices) {
   // This means we always buy YES shares, but from the opposite team
   const hedgeSide = 'YES'; // Always buy YES shares in opposite team's market
   const hedgePrice = currentPrices.oppositeYesAsk; // Use YES ask price from opposite team's market
-  const potentialPayoutIfOriginalWins = shares; // Each share pays $1
-  
-  // Calculate fees for the hedge transaction
   const fees = currentPrices.fees || { takerFee: 0.05, transactionFee: 0.01 };
   
-  // Calculate hedge size for equal profits (including fees)
-  // If original wins: profit = payoutOriginal - initialCost - hedgeCost - hedgeFees
-  // If hedge wins: profit = hedgeShares - initialCost - hedgeFees
-  // Set equal: payoutOriginal - initialCost - hedgeCost - hedgeFees = hedgeShares - initialCost - hedgeFees
-  // payoutOriginal - hedgeCost = hedgeShares
-  // payoutOriginal = hedgeCost + hedgeShares
-  // payoutOriginal = hedgeCost + (hedgeCost / hedgePrice)
-  // payoutOriginal = hedgeCost(1 + 1/hedgePrice)
-  // hedgeCost = payoutOriginal / (1 + 1/hedgePrice)
+  // Correct formula: perfect hedge requires the same number of shares on the opposite side
+  const hedgeShares = shares;
+  const hedgeCost = hedgeShares * hedgePrice;
   
-  const hedgeCostCalculated = potentialPayoutIfOriginalWins / (1 + (1 / hedgePrice));
-  const hedgeSharesCalculated = hedgeCostCalculated / hedgePrice;
-  
-  // Calculate fees for the hedge
-  const hedgeTakerFee = hedgeCostCalculated * fees.takerFee;
-  const hedgeTransactionFee = hedgeCostCalculated * fees.transactionFee;
+  // Fees apply on the hedge transaction
+  const hedgeTakerFee = hedgeCost * fees.takerFee;
+  const hedgeTransactionFee = hedgeCost * fees.transactionFee;
   const hedgeTotalFees = hedgeTakerFee + hedgeTransactionFee;
   
-  const profitIfOriginalWins = potentialPayoutIfOriginalWins - initialCost - hedgeCostCalculated - hedgeTotalFees;
-  const profitIfHedgeWins = hedgeSharesCalculated - initialCost - hedgeTotalFees;
+  const totalInvestment = initialCost + hedgeCost + hedgeTotalFees;
+  
+  // Outcomes (both equal for a perfect hedge)
+  const profitIfOriginalWins = shares - totalInvestment;
+  const profitIfHedgeWins = hedgeShares - totalInvestment;
+  const guaranteedProfit = Math.min(profitIfOriginalWins, profitIfHedgeWins);
+  
+  // Sanity checks and user warnings
+  const priceSum = (currentPrices.yesAsk || 0) + (currentPrices.oppositeYesAsk || 0);
+  const currentPositionValue = side === 'YES' ? shares * (currentPrices.yesBid || 0) : shares * (currentPrices.noBid || 0);
+  const unrealizedGain = currentPositionValue - initialCost;
+  
+  let warning = null;
+  if (priceSum > 1.05) {
+    warning = 'Market prices look expensive to hedge right now (wide spread).';
+  } else if (guaranteedProfit < 0) {
+    warning = 'This hedge would lock in a loss. Use only to stop further downside.';
+  } else if (unrealizedGain <= 0) {
+    warning = 'Your position hasn\'t moved in your favor yet. Hedging now may lock in a loss or break-even.';
+  }
   
   return {
     strategy: 'Perfect Hedge',
-    action: `Buy ${hedgeSharesCalculated.toFixed(2)} YES shares in the opposite team's market at $${hedgePrice.toFixed(2)}`,
+    action: `Buy ${hedgeShares.toFixed(2)} YES shares in the opposite team's market at $${hedgePrice.toFixed(2)}`,
     hedgeSide: hedgeSide,
-    hedgeShares: hedgeSharesCalculated,
+    hedgeShares: hedgeShares,
     hedgePrice: hedgePrice,
-    hedgeCost: hedgeCostCalculated,
+    hedgeCost: hedgeCost,
     hedgeFees: {
       takerFee: hedgeTakerFee,
       transactionFee: hedgeTransactionFee,
       total: hedgeTotalFees
     },
-    totalInvestment: initialCost + hedgeCostCalculated + hedgeTotalFees,
+    totalInvestment: totalInvestment,
     profitIfOriginalWins: profitIfOriginalWins,
     profitIfHedgeWins: profitIfHedgeWins,
-    guaranteedProfit: Math.min(profitIfOriginalWins, profitIfHedgeWins),
-    profitPercent: (Math.min(profitIfOriginalWins, profitIfHedgeWins) / initialCost) * 100,
-    risk: 'None - profit locked in regardless of outcome',
-    description: `Lock in a guaranteed profit of $${Math.min(profitIfOriginalWins, profitIfHedgeWins).toFixed(2)} no matter what happens. Buy YES shares in the opposite team's market to create a true hedge (fees included).`
+    guaranteedProfit: guaranteedProfit,
+    profitPercent: (guaranteedProfit / initialCost) * 100,
+    unrealizedGain: unrealizedGain,
+    risk: guaranteedProfit >= 0 ? 'None - profit locked in regardless of outcome' : 'Locks in a guaranteed loss',
+    description: guaranteedProfit >= 0 
+      ? `Lock in a guaranteed profit of $${guaranteedProfit.toFixed(2)} no matter what happens.`
+      : `This would lock in a loss of $${Math.abs(guaranteedProfit).toFixed(2)}. Only hedge if you want to stop further losses.`,
+    warning: warning
   };
 }
 
@@ -360,16 +370,21 @@ function calculatePartialHedge(position, currentPrices, hedgePercent) {
   const hedgeSide = 'YES'; // Always buy YES shares in opposite team's market
   const hedgePrice = currentPrices.oppositeYesAsk; // Use YES ask price from opposite team's market
   
-  // Calculate perfect hedge first
-  const perfectHedge = calculatePerfectHedge(position, currentPrices);
-  
-  // Apply percentage
-  const hedgeShares = perfectHedge.hedgeShares * (hedgePercent / 100);
+  // Use corrected base: partial hedge is a percentage of original shares
+  const hedgeShares = shares * (hedgePercent / 100);
   const hedgeCost = hedgeShares * hedgePrice;
   
+  // Include fees on the hedge
+  const fees = currentPrices.fees || { takerFee: 0.05, transactionFee: 0.01 };
+  const hedgeTakerFee = hedgeCost * fees.takerFee;
+  const hedgeTransactionFee = hedgeCost * fees.transactionFee;
+  const hedgeTotalFees = hedgeTakerFee + hedgeTransactionFee;
+  
+  const totalInvestment = initialCost + hedgeCost + hedgeTotalFees;
+  
   // Calculate outcomes
-  const profitIfOriginalWins = shares - initialCost - hedgeCost;
-  const profitIfHedgeWins = hedgeShares - initialCost;
+  const profitIfOriginalWins = shares - totalInvestment;
+  const profitIfHedgeWins = hedgeShares - totalInvestment;
   
   // Calculate profit percentage based on the better outcome
   const betterProfit = Math.max(profitIfOriginalWins, profitIfHedgeWins);
@@ -382,13 +397,18 @@ function calculatePartialHedge(position, currentPrices, hedgePercent) {
     hedgeShares: hedgeShares,
     hedgePrice: hedgePrice,
     hedgeCost: hedgeCost,
-    totalInvestment: initialCost + hedgeCost,
+    hedgeFees: {
+      takerFee: hedgeTakerFee,
+      transactionFee: hedgeTransactionFee,
+      total: hedgeTotalFees
+    },
+    totalInvestment: totalInvestment,
     profitIfOriginalWins: profitIfOriginalWins,
     profitIfHedgeWins: profitIfHedgeWins,
     profit: betterProfit,
     profitPercent: profitPercent,
     risk: hedgePercent < 100 ? 'Moderate - partial exposure remains' : 'None',
-    description: `Hedge ${hedgePercent}% of your position by buying YES shares in the opposite team's market. You'll profit more if your original team wins, but have downside protection if it loses.`
+    description: `Hedge ${hedgePercent}% of your position. You keep some upside if your original pick wins, and add a safety net if it doesn\'t.`
   };
 }
 
@@ -459,28 +479,64 @@ function formatPercent(percent) {
 function explainStrategy(strategy, position) {
   const explanations = {
     'Simple Exit': `
-      You'll sell all your ${position.shares} ${position.side} shares immediately.
-      This closes your position completely - no more risk, no more potential gains.
+      What it is:
+      • Sell all your ${position.shares} ${position.side} shares now.
+      
+      When to use:
+      • You want cash now and zero risk.
+      • You don’t want to watch the market anymore.
+      
+      Why it helps:
+      • Locks in today’s result (profit or loss) immediately.
+      
+      What to do:
+      • Place a sell order for ${position.shares} ${position.side} at the current bid.
       ${strategy.profit >= 0 ? 
-        `You'll walk away with a ${formatCurrency(strategy.profit)} profit (${formatPercent(strategy.profitPercent)} return).` :
-        `You'll take a ${formatCurrency(strategy.profit)} loss, but at least you're out.`
+        `Result: ${formatCurrency(strategy.profit)} profit (${formatPercent(strategy.profitPercent)}).` :
+        `Result: ${formatCurrency(strategy.profit)} loss (stops further downside).`
       }
     `,
     'Perfect Hedge': `
-      You'll buy ${strategy.hedgeShares.toFixed(0)} ${strategy.hedgeSide} shares for ${formatCurrency(strategy.hedgeCost)}.
-      This creates a situation where you profit EXACTLY the same amount no matter what happens:
+      What it is:
+      • Buy ${strategy.hedgeShares.toFixed(0)} ${strategy.hedgeSide} shares in the opposite market for ${formatCurrency(strategy.hedgeCost)}.
+      • This makes your profit the SAME no matter who wins.
       
-      • If ${position.side} wins: You collect ${formatCurrency(position.shares)} from your original bet, 
-        lose ${formatCurrency(strategy.hedgeCost)} on the hedge = ${formatCurrency(strategy.guaranteedProfit)} profit
+      When to use:
+      • You want a sure outcome with no more guessing.
+      • Prices have moved in your favor and you want to lock it in.
       
-      • If ${strategy.hedgeSide} wins: You collect ${formatCurrency(strategy.hedgeShares)} from the hedge,
-        lose ${formatCurrency(position.shares * position.buyPrice)} on original = ${formatCurrency(strategy.guaranteedProfit)} profit
+      Why it helps:
+      • Removes all risk. Your profit becomes fixed today.
+      ${strategy.warning ? `
+      Heads up: ${strategy.warning}
+      ` : ''}
       
-      You literally cannot lose. Sleep easy!
+      What to do:
+      • Buy ${strategy.hedgeShares.toFixed(0)} ${strategy.hedgeSide} at about $${(strategy.hedgePrice || 0).toFixed(2)} each.
+      • Your profit either way ≈ ${formatCurrency(strategy.guaranteedProfit)} after fees.
     `
   };
   
-  return explanations[strategy.strategy] || `Hedge ${strategy.strategy.match(/\d+/)?.[0]}% of your position for balanced risk/reward.`;
+  if (explanations[strategy.strategy]) {
+    return explanations[strategy.strategy];
+  }
+  // Partial Hedge generic messaging
+  const pct = strategy.strategy.match(/\d+/)?.[0] || 'some';
+  return `
+    What it is:
+    • Hedge ${pct}% of your position by buying the opposite side.
+    
+    When to use:
+    • You want protection but still want upside if your original pick wins.
+    
+    Why it helps:
+    • Smooths out outcomes: smaller loss if wrong, some profit if right.
+    
+    What to do:
+    • Buy ${strategy.hedgeShares.toFixed(0)} ${strategy.hedgeSide} at about $${(strategy.hedgePrice || 0).toFixed(2)} each.
+    • If your original side wins: profit ≈ ${formatCurrency(strategy.profitIfOriginalWins)}
+    • If the hedge wins: profit ≈ ${formatCurrency(strategy.profitIfHedgeWins)}
+  `;
 }
 
 // ============================================
